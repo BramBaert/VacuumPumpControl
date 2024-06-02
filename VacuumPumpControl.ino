@@ -9,7 +9,8 @@
     in XPT2046_Touchscreen.cpp change the SPI_SETTING line to
        #define SPI_SETTING     SPISettings(50000, MSBFIRST, SPI_MODE0)
 */
-#include "XPT2046_Touchscreen.h"
+//#include "XPT2046_Touchscreen.h"
+#include "XPT2046_Calibrated.h"
 
 /* To support the arduino R4 change the following lines in the cpp file
     #ifndef RASPI
@@ -49,18 +50,12 @@ byte gv_frame_full[8][12] = {
   { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
 };
 
-Adafruit_ILI9341 tft = Adafruit_ILI9341(PIN_TFT_CS, PIN_TFT_CMD, PIN_TFT_RST);
-XPT2046_Touchscreen ts(PIN_TOUCH_CS,255);  // Apperently the R4 only supports IRQ's on pin_d2 and pin_d3, to bad TOUCH_IRQ is on pin_d4 
-
-/*
- * Initialize Constructor
- * Optional parameters:
- *  - EOC_PIN: End Of Conversion (defualt: -1)
- *  - RST_PIN: Reset (defualt: -1)
- *  - MIN_PSI: Minimum Pressure (default: 0 PSI)
- *  - MAX_PSI: Maximum Pressure (default: 25 PSI)
- */
-//SparkFun_MicroPressure mpr(EOC_PIN, RST_PIN, MIN_PSI, MAX_PSI);
+Adafruit_ILI9341        tft = Adafruit_ILI9341(PIN_TFT_CS, PIN_TFT_CMD, PIN_TFT_RST);
+#ifdef CONTROLLER_VARIANT
+XPT2046_Calibrated      ts(PIN_TOUCH_CS,255);           // Apparently the R4 only supports IRQ's on PIN_D2 and PIN_D3, to bad TOUCH_IRQ is on PIN_D4 
+#else
+XPT2046_Calibrated      ts(PIN_TOUCH_CS,PIN_TOUCH_IRQ); // To get this to work, short PIN_D3 and PIN_D4
+#endif
 SparkFun_MicroPressure  gv_mpr; // Use default values with reset and EOC pins unused
 ArduinoLEDMatrix        gv_matrix;
 
@@ -92,7 +87,7 @@ void setup() {
   gv_matrix.renderBitmap(gv_frame_full, 8, 12);
 
   // Configure the touch
-  ts.begin(SPI);
+  ts.begin();
   ts.setRotation(1);
   // Do a first transaction towards the touch, to free up the peripheral.
   // I don't know why it is needed, but not doing so slows down the TFT
@@ -101,8 +96,20 @@ void setup() {
 
   // Configure the TFT and run the benchmark as startup annimation
   tft.begin(12000000);
+  tft.setRotation(1);
+#if !defined(VERIFY_CALIBRATION) && !defined(RUN_CALIBRATION)
   tft_benchmark();
+#endif
   tft.fillScreen(ILI9341_BLACK);
+
+#ifdef VERIFY_CALIBRATION
+  ts.calibrate(cal);
+#endif
+
+#if defined(VERIFY_CALIBRATION) || defined(RUN_CALIBRATION)
+  for (int i = (int)PointID::NONE + 1; i < (int)PointID::COUNT; ++i)
+  { crosshair(_screenPoint[i]); }
+#endif
 }
 
 void loop() {
@@ -116,20 +123,45 @@ void loop() {
   float           fv_f32_pressure             = 0.0;
   TS_Point        fv_touch_point;
 
+#ifdef CONTROLLER_VARIANT
   // Note: both ts.touched() and ts.getPoint() do an actual read-out of the touch driver
   //       thus reading out the point directly and checking the pressure our selfs is
   //       faster than using ts.touched(). On an arduion R4 Wifi using 50kHz SPI speed
   //       4 ms i.s.o. 8 ms
-  fv_touch_point = ts.getPoint();
-  if (500 < fv_touch_point.z) {
 
-    Serial.print("Pressure = ");
+  // TODO reading out the INPUT might be even more efficient and equally responsive
+  fv_touch_point = ts.getPoint();
+  if (500 < fv_touch_point.z) {    
+#else
+  if (ts.tirqTouched()) {
+    fv_touch_point = ts.getPoint();
+#endif
+
+#if defined(VERIFY_CALIBRATION) || defined(RUN_CALIBRATION)
+    /*Serial.print("Pressure = ");
     Serial.print(fv_touch_point.z);
     Serial.print(", x = ");
     Serial.print(fv_touch_point.x);
     Serial.print(", y = ");
     Serial.print(fv_touch_point.y);
-    Serial.println();
+    Serial.println();*/
+
+#ifdef RUN_CALIBRATION
+    // Determine the touch limits dimension 
+    updateScreenEdges(fv_touch_point);
+#endif
+
+    // determine which screen point is closest to this touch event
+    PointID n = nearestScreenPoint(fv_touch_point);
+
+    // update the corresponding line mapping
+    drawMapping(n, fv_touch_point);
+
+    delay(333);
+  }
+}
+#else /* NORMAL TOUCH OPERATION */
+
   }
 
   /* The micropressure sensor outputs pressure readings in pounds per square inch (PSI).
@@ -180,9 +212,146 @@ void loop() {
       break;
   }
 
-
-
 }
+#endif
+
+//TODO thes probably should be moved outside the main ino file
+#if defined(VERIFY_CALIBRATION) || defined(RUN_CALIBRATION)
+void crosshair(TS_Point p) {
+  tft.drawCircle   (p.x,     p.y,     6, ILI9341_WHITE);
+  tft.drawFastHLine(p.x - 4, p.y,     9, ILI9341_WHITE);
+  tft.drawFastVLine(p.x,     p.y - 4, 9, ILI9341_WHITE);
+}
+
+uint16_t distance(TS_Point a, TS_Point b) {
+  // calculate the distance between points a and b in whatever 2D coordinate
+  // system they both exist. returns an integer distance with naive rounding.
+  static uint16_t const MAX = ~((uint16_t)0U);
+  int32_t dx = b.x - a.x;
+  int32_t dy = b.y - a.y;
+  uint32_t dsq = (uint32_t)sq(dx) + (uint32_t)sq(dy);
+  double d = sqrt(dsq); // add 1/2 for rounding
+  if (d > ((double)MAX - 0.5))
+    { return MAX; }
+  else
+    { return (uint16_t)(d + 0.5); } // poor-man's rounding
+}
+
+void drawMapping(PointID n, TS_Point tp) {
+  static uint8_t const BUF_LEN = 64;
+  static char buf[BUF_LEN] = { '\0' };
+
+  static uint16_t lineHeight = (uint16_t)(1.5F * 8.0F + 0.5F);
+  static uint16_t lineSpace  = 1U;
+
+  int16_t posX, posY;
+  uint16_t sizeW, sizeH;
+  uint16_t posLeft = 6U;
+  uint16_t posTop =
+    SCREEN_HEIGHT - (3U - (uint16_t)n) * (lineHeight + lineSpace);
+
+  TS_Point sp = _screenPoint[(int)n];
+
+  // construct the line buffer
+  snprintf(buf, BUF_LEN, "%c (%u,%u) = (%u,%u)",
+    (uint8_t)n + 'A', sp.x, sp.y, tp.x, tp.y);
+
+  // print the current line to serial port for debugging
+  //Serial.println("%s\n", buf);
+  Serial.println(buf);
+
+  // erase the previous line
+  tft.getTextBounds(buf, posLeft, posTop, &posX, &posY, &sizeW, &sizeH);
+  tft.fillRect(posX, posY, sizeW, sizeH, ILI9341_BLACK);
+
+  // draw the current line
+  tft.setCursor(posLeft, posTop);
+  //tft.printf("%s", buf);
+  tft.print(buf);
+}
+
+// -- NOT FOR GENERAL USAGE -- IGNORE THESE --------------------------- BEGIN --
+// approximate calibration only used for determining distance from touch to
+// crosshair while calibrating. you can determine these values by using the
+// updateScreenEdges() routine below -- just call it with the position of every
+// touch event while scrubbing all 4 edges of the screen with a stylus.
+
+#define MAP_2D_PORTRAIT(x, y)                                        \
+  TS_Point(                                                          \
+    (int16_t)map((x), XPT2046_X_LO, XPT2046_X_HI, 0,  SCREEN_WIDTH), \
+    (int16_t)map((y), XPT2046_Y_LO, XPT2046_Y_HI, 0, SCREEN_HEIGHT)  \
+  )
+#define MAP_2D_LANDSCAPE(x, y)                                       \
+  TS_Point(                                                          \
+    (int16_t)map((x), XPT2046_Y_LO, XPT2046_Y_HI, 0,  SCREEN_WIDTH), \
+    (int16_t)map((y), XPT2046_X_LO, XPT2046_X_HI, 0, SCREEN_HEIGHT)  \
+  )
+void updateScreenEdges(TS_Point p) {
+  static uint16_t xHi = 0xFFFF;
+  static uint16_t yHi = 0xFFFF;
+  static uint16_t xLo = 0x0;
+  static uint16_t yLo = 0x0;
+  if (p.x < xHi) { xHi = p.x; }
+  if (p.x > xLo) { xLo = p.x; }
+  if (p.y < yHi) { yHi = p.y; }
+  if (p.y > yLo) { yLo = p.y; }
+  /*Serial.printf("[X_LO, X_HI] = [%u, %u], [Y_LO, Y_HI] = [%u, %u]\n",
+      xLo, xHi, yLo, yHi);*/
+  Serial.print("[X_LO, X_HI] = [");
+  Serial.print(xLo);
+  Serial.print(", ");
+  Serial.print(xHi);
+  Serial.print("], [Y_LO, Y_HI] = [");
+  Serial.print(yLo);
+  Serial.print(", ");
+  Serial.print(yHi);
+  Serial.println("]");
+}
+// -- NOT FOR GENERAL USAGE -- IGNORE THESE ----------------------------- END --
+
+PointID nearestScreenPoint(TS_Point touch) {
+
+#ifdef VERIFY_CALIBRATION
+  // the input point is already in screen coordinates because the touchscreen
+  // has been calibrated. no need to perform translation.
+  TS_Point tp = touch;
+#else
+  // translate the input point (in touch coordinates) to screen coordinates
+  // using the hardcoded ranges defined in these macros. not particularly
+  // accurate, but it doesn't need to be.
+  TS_Point tp = (SCREEN_ROTATION & 1U)
+    ? MAP_2D_LANDSCAPE(touch.x, touch.y)
+    : MAP_2D_PORTRAIT(touch.x, touch.y);
+  /*Serial.printf(
+      "Touch{%u, %u} => Screen{%u, %u}\n", touch.x, touch.y, tp.x, tp.y);*/
+    Serial.print("Touch{");
+    Serial.print(touch.x);
+    Serial.print(", ");
+    Serial.print(touch.y);
+    Serial.print("} => Screen{");
+    Serial.print(tp.x);
+    Serial.print(", ");
+    Serial.print(tp.y);
+    Serial.println("}");
+#endif
+
+  PointID  near = PointID::NONE;
+  uint16_t dist = 0U;
+
+  for (int id = (int)PointID::NONE + 1; id < (int)PointID::COUNT; ++id) {
+    // compute the distance from our (translated) input touch point to each
+    // screen point to determine minimum distance.
+    uint16_t d = distance(tp, _screenPoint[id]);
+    if ((near == PointID::NONE) || (d < dist)) {
+      // new minimum distance, this is the nearest point to our touch (so far)
+      near = (PointID)id;
+      dist = d;
+    }
+  }
+
+  return near;
+}
+#endif
 
 void tft_benchmark(void){
 
