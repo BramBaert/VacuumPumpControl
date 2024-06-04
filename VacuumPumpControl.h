@@ -32,10 +32,16 @@ static TS_Point _touchPoint[] = {
 
 #define RELAY_ON                HIGH
 #define RELAY_OFF               LOW
+#define STATE_PUMP_IDLE         0
 #define STATE_PUMP_OFF          1
 #define STATE_PUMP_ON           2
 #define STATE_PUMP_HOLD         3
 #define STATE_PUMP_THERMAL_PROT 4
+
+#define STATE_SCREEN_MENU_MAIN    0
+#define STATE_SCREEN_MENU_PROFILE 1
+#define STATE_SCREEN_PROFILE      2
+#define STATE_SCREEN_SET_PONIT    3
 
 #ifdef CONTROLLER_VARIANT
   #ifdef VACUUM_PUMP_CONTROL_VARIANT
@@ -60,6 +66,10 @@ static TS_Point _touchPoint[] = {
 #define PIN_TFT_MISO            PIN_D12
 #define PIN_TFT_CLK             PIN_D13
 
+#define BUTTON_BLUE             0x54FF // 51 153 255
+#define BUTTON_TEXT_ORANGE      0xFA86 // 255 85 51
+#define BUTTON_TEXT_RED         0xF98C // 255 51 201
+
 enum class PointID { NONE = -1, A, B, C, COUNT };
 
 static uint16_t const SCREEN_WIDTH    = 320;
@@ -67,16 +77,14 @@ static uint16_t const SCREEN_HEIGHT   = 240;
 static uint8_t  const SCREEN_ROTATION = 1U;
 
 
-#if defined(VERIFY_CALIBRATION) || defined(RUN_CALIBRATION)
 // source points used for calibration
 static TS_Point _screenPoint[] = {
   TS_Point( 15,  15), // point A
   TS_Point(305, 113), // point B
   TS_Point(167, 214)  // point C
 };
-#endif
 
-#ifdef VERIFY_CALIBRATION
+#ifndef RUN_CALIBRATION
 static TS_Calibration cal(
     _screenPoint[(int)PointID::A], _touchPoint[(int)PointID::A],
     _screenPoint[(int)PointID::B], _touchPoint[(int)PointID::B],

@@ -98,11 +98,11 @@ void setup() {
   tft.begin(12000000);
   tft.setRotation(1);
 #if !defined(VERIFY_CALIBRATION) && !defined(RUN_CALIBRATION)
-  tft_benchmark();
+  splashScreen();
+  drawMainMenu();
 #endif
-  tft.fillScreen(ILI9341_BLACK);
 
-#ifdef VERIFY_CALIBRATION
+#ifndef RUN_CALIBRATION
   ts.calibrate(cal);
 #endif
 
@@ -116,8 +116,12 @@ void loop() {
 
   static float    fv_f32_thresh_high          = 0.25;
   static float    fv_f32_thresh_low           = 0.2;
-  static uint8_t  fv_u8_state                 = STATE_PUMP_OFF;
+  static uint8_t  fv_u8_state                 = STATE_PUMP_IDLE;
+  static uint8_t  fv_u8_state_d1              = STATE_PUMP_IDLE;
+  static uint8_t  fv_u8_state_d2              = STATE_PUMP_IDLE;
   static uint8_t  fv_u8_backlight_brightness  = 250;
+  static uint8_t  fv_u8_screen_state          = STATE_SCREEN_MENU_MAIN;
+  static bool     fv_b_not_touched            = true;
 
   uint32_t        fv_u32_time_backlight       = 0;
   float           fv_f32_pressure             = 0.0;
@@ -162,6 +166,41 @@ void loop() {
 }
 #else /* NORMAL TOUCH OPERATION */
 
+    if(fv_b_not_touched){
+      Serial.print("x = ");
+      Serial.print(fv_touch_point.x);
+      Serial.print(", y = ");
+      Serial.print(fv_touch_point.y);
+      Serial.println();
+      switch(fv_u8_screen_state){
+        case STATE_SCREEN_MENU_MAIN:
+          if ((60 < fv_touch_point.x) && ( 260 > fv_touch_point.x)){
+            if ((50 < fv_touch_point.y) && ( 100 > fv_touch_point.y)){
+              // TODO
+            }
+            if ((150 < fv_touch_point.y) && ( 200 > fv_touch_point.y)){
+              drawProfileMenu();
+              fv_u8_screen_state = STATE_SCREEN_MENU_PROFILE;
+
+            }
+          }
+          break;
+        case STATE_SCREEN_MENU_PROFILE:
+          drawMainMenu();
+          fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
+          break;
+        case STATE_SCREEN_PROFILE:
+        case STATE_SCREEN_SET_PONIT:
+        default:
+          break;
+      }
+    }
+    fv_b_not_touched = false;
+    delay(100);
+
+  }
+  else{
+    fv_b_not_touched = true;
   }
 
   /* The micropressure sensor outputs pressure readings in pounds per square inch (PSI).
@@ -172,21 +211,6 @@ void loop() {
   fv_f32_pressure = gv_mpr.readPressure(BAR);
   Serial.print(fv_f32_pressure,6);
   Serial.println(" bar");
-
-  /*
-  if(fv_u32_time_backlight + 500 < millis()){
-    fv_u32_time_backlight = millis();
-    Serial.print("Display backlight brigthness = ");
-    Serial.println(fv_u8_backlight_brightness);
-    analogWrite(PIN_DISP_BACKLIGHT, fv_u8_backlight_brightness);
-    if(0 == fv_u8_backlight_brightness){
-      fv_u8_backlight_brightness = 250;
-    }
-    else{
-      fv_u8_backlight_brightness -= 10;
-    }    
-  }
-  */
 
   switch(fv_u8_state){
     case STATE_PUMP_OFF:
@@ -204,18 +228,103 @@ void loop() {
       }
       break;
     case STATE_PUMP_HOLD:
+      //TODO, Intentional fall-through untill done
     case STATE_PUMP_THERMAL_PROT:
+      if(fv_u8_state_d2 != fv_u8_state){
+        Serial.println("Turning pump off, thermal protection");
+      }
+      digitalWrite(PIN_RELAY, RELAY_OFF);
+      break;
+    case STATE_PUMP_IDLE:
+      //Intentional fall-through
     default:
-      Serial.println("Turning pump off.");
-      fv_u8_state = STATE_PUMP_OFF;
+      if(fv_u8_state_d2 != fv_u8_state){
+        Serial.println("Turning pump off, controller to idle");
+      }
+      fv_u8_state = STATE_PUMP_IDLE;
       digitalWrite(PIN_RELAY, RELAY_OFF);
       break;
   }
 
+  fv_u8_state_d2 = fv_u8_state_d1;
+  fv_u8_state_d1 = fv_u8_state;
+
 }
 #endif
 
-//TODO thes probably should be moved outside the main ino file
+void splashScreen(void){
+
+  int16_t   fv_x1, fv_y1;
+  uint16_t  fv_width, fv_height;
+  uint16_t  fv_x = tft.width();
+  uint16_t  fv_y = 2*(tft.height()/3);
+  int i = 0;
+
+  tft.setTextWrap(false);
+  tft.fillScreen(ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.getTextBounds("VacuumPumpControl", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+
+  for(;fv_y>0;fv_y -= 2){
+    tft.fillRect(fv_x, fv_y, fv_width, fv_height, ILI9341_BLACK);
+    fv_x = (int16_t) (0.0260596*(float)(fv_y * fv_y) - 2.563434*(float) fv_y + 63.02263);
+    tft.setCursor(fv_x,fv_y);
+    tft.setTextColor(ILI9341_BLUE);
+    tft.print("Vacuum");
+    tft.setTextColor(ILI9341_YELLOW);
+    tft.print("Pump");
+    tft.setTextColor(ILI9341_RED);
+    tft.print("Control");
+    delay(5); 
+  }
+  delay(3000);
+
+}
+
+void drawMainMenu(void){
+  int16_t   fv_x1, fv_y1;
+  uint16_t  fv_width, fv_height;
+
+  tft.fillRect(0, 18, tft.width(), tft.height(), ILI9341_BLACK);
+  tft.fillRoundRect((tft.width()-200)/2, 50, 200, 50, 3, BUTTON_BLUE);
+  tft.fillRoundRect((tft.width()-200)/2, 150, 200, 50, 3, BUTTON_BLUE);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_BLACK);
+  tft.getTextBounds("Set Point", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+  tft.setCursor((tft.width()-fv_width)/2,(50+(50-fv_height)/2));
+  tft.print("Set Point");
+  tft.getTextBounds("Profile", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+  tft.setCursor((tft.width()-fv_width)/2,(150+(50-fv_height)/2));
+  tft.print("Profile");
+}
+
+void drawProfileMenu(void){
+  int16_t   fv_x1, fv_y1;
+  uint16_t  fv_width, fv_height;
+
+  tft.fillRect(0, 18, tft.width(), tft.height(), ILI9341_BLACK);
+  tft.fillRoundRect((tft.width()/4)-(140/2), 50, 140, 50, 3, BUTTON_BLUE);
+  tft.fillRoundRect((tft.width()/4)-(140/2), 150, 140, 50, 3, BUTTON_BLUE);
+  tft.fillRoundRect(((tft.width()/4)*3)-(140/2), 50, 140, 50, 3, BUTTON_BLUE);
+  tft.fillRoundRect(((tft.width()/4)*3)-(140/2), 150, 140, 50, 3, BUTTON_BLUE);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_BLACK);
+  tft.getTextBounds("De-gas", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+  tft.setCursor((tft.width()/4)-(fv_width/2),(50+(50-fv_height)/2));
+  tft.print("De-gas");
+  tft.getTextBounds("Profile 2", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+  tft.setCursor((tft.width()/4)-(fv_width/2),(150+(50-fv_height)/2));
+  tft.print("Profile 2");
+  tft.getTextBounds("Profile 3", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+  tft.setCursor(((tft.width()/4)*3)-(fv_width/2),(50+(50-fv_height)/2));
+  tft.print("Profile 3");
+  tft.getTextBounds("Profile 4", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+  tft.setCursor(((tft.width()/4)*3)-(fv_width/2),(150+(50-fv_height)/2));
+  tft.print("Profile 4");
+}
+
+
+//TODO these probably should be moved outside the main ino file
 #if defined(VERIFY_CALIBRATION) || defined(RUN_CALIBRATION)
 void crosshair(TS_Point p) {
   tft.drawCircle   (p.x,     p.y,     6, ILI9341_WHITE);
