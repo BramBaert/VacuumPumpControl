@@ -3,6 +3,10 @@
 
 #include "SparkFun_MicroPressure.h"
 #include "Arduino_LED_Matrix.h"
+/* In the below library version 1.11.9:
+    * To make the drawCircleHelper work you need to add:
+      * startWrite(); before the while function
+      * endWrite(); after the while function
 #include "Adafruit_GFX.h"
 
 /* Due to a HW bug, the SPI frequency in XPT2046_Touchscreen.cpp must be lowered to 50kHz 
@@ -58,6 +62,7 @@ XPT2046_Calibrated      ts(PIN_TOUCH_CS,PIN_TOUCH_IRQ); // To get this to work, 
 #endif
 SparkFun_MicroPressure  gv_mpr; // Use default values with reset and EOC pins unused
 ArduinoLEDMatrix        gv_matrix;
+uint8_t                 gv_u8_startStopState = 0;               // TODO I should make a class for the start/stop button
 
 void setup() {
   // Configure the I/Os
@@ -114,18 +119,14 @@ void setup() {
 
 void loop() {
 
-  static float    fv_f32_thresh_high          = 0.25;
-  static float    fv_f32_thresh_low           = 0.2;
-  static uint8_t  fv_u8_state                 = STATE_PUMP_IDLE;
-  static uint8_t  fv_u8_state_d1              = STATE_PUMP_IDLE;
-  static uint8_t  fv_u8_state_d2              = STATE_PUMP_IDLE;
   static uint8_t  fv_u8_backlight_brightness  = 250;
   static uint8_t  fv_u8_screen_state          = STATE_SCREEN_MENU_MAIN;
   static bool     fv_b_not_touched            = true;
+  static uint32_t fv_u32_lastRun              = 0; // last time the state machine was executed, expressed in ms
 
   uint32_t        fv_u32_time_backlight       = 0;
-  float           fv_f32_pressure             = 0.0;
   TS_Point        fv_touch_point;
+
 
 #ifdef CONTROLLER_VARIANT
   // Note: both ts.touched() and ts.getPoint() do an actual read-out of the touch driver
@@ -173,84 +174,260 @@ void loop() {
       Serial.print(fv_touch_point.y);
       Serial.println();
       switch(fv_u8_screen_state){
-        case STATE_SCREEN_MENU_MAIN:
-          if ((60 < fv_touch_point.x) && ( 260 > fv_touch_point.x)){
-            if ((50 < fv_touch_point.y) && ( 100 > fv_touch_point.y)){
-              // TODO
-            }
-            if ((150 < fv_touch_point.y) && ( 200 > fv_touch_point.y)){
-              drawProfileMenu();
-              fv_u8_screen_state = STATE_SCREEN_MENU_PROFILE;
 
-            }
+        case STATE_SCREEN_MENU_MAIN:
+          if (checkPointInSquare(fv_touch_point, BUTTON_1X2_X_1, BUTTON_1X2_Y_1, BUTTON_1X2_WIDTH, BUTTON_1X2_HEIGTH)){
+              drawSetPointInitial();
+              fv_u8_screen_state = STATE_SCREEN_SET_POINT;
+          }
+          else if (checkPointInSquare(fv_touch_point, BUTTON_1X2_X_1, BUTTON_1X2_Y_2, BUTTON_1X2_WIDTH, BUTTON_1X2_HEIGTH)){
+            drawProfileMenu();
+            fv_u8_screen_state = STATE_SCREEN_MENU_PROFILE;
           }
           break;
         case STATE_SCREEN_MENU_PROFILE:
-          drawMainMenu();
-          fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
+
+          if (backButtonLocation(fv_touch_point)){
+            drawMainMenu();
+            fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
+          }
+          else{
+            if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_1, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
+              drawProfileInitial();//gv_profile1);
+              fv_u8_screen_state = STATE_SCREEN_PROFILE;
+            }
+            else if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_1, BUTTON_2X2_Y_2, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
+
+            }
+            else if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_2, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
+
+            }
+            else if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_2, BUTTON_2X2_Y_2, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
+
+            }
+          }
+
           break;
         case STATE_SCREEN_PROFILE:
-        case STATE_SCREEN_SET_PONIT:
+          if (backButtonLocation(fv_touch_point)){
+            fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
+            setPointStateMachine(0,0,2);
+            drawMainMenu();
+          }
+          break;
+        case STATE_SCREEN_SET_POINT:
+          if (backButtonLocation(fv_touch_point)){
+            fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
+            setPointStateMachine(0,0,2);
+            drawMainMenu();
+          }
+          else{
+            // High pressure decrement
+            if (checkPointInSquare(fv_touch_point, 40, 120, 40 , 40)){
+              setPointStateMachine(2,0,0);
+            }
+            // High pressure increment
+            else if (checkPointInSquare(fv_touch_point, 170, 120, 40, 40)){
+              setPointStateMachine(1,0,0);
+            }
+            // Low pressure decrement
+            else if (checkPointInSquare(fv_touch_point, 40, 190, 40, 40)){
+              setPointStateMachine(0,2,0);
+            }
+            // High pressure increment
+            else if (checkPointInSquare(fv_touch_point, 170, 190, 40, 40)){
+              setPointStateMachine(0,1,0);
+            }
+            // Start / Stop
+            else if (checkPointInSquare(fv_touch_point, tft.width()-23,23,40,40)){
+              if(1 == gv_u8_startStopState){
+                setPointStateMachine(0,0,1);
+                drawStartStopButton(2);
+              }
+              else{
+                setPointStateMachine(0,0,2);
+                drawStartStopButton(1);
+              }
+            }
+          }
         default:
           break;
       }
     }
     fv_b_not_touched = false;
     delay(100);
-
   }
   else{
     fv_b_not_touched = true;
   }
 
-  /* The micropressure sensor outputs pressure readings in pounds per square inch (PSI).
-     Optionally, if you prefer pressure in another unit, the library can convert the
-     pressure reading to: pascals, kilopascals, bar, torr, inches of murcury, and
-     atmospheres.
-   */
+  // Only execute the state machine every "STATE_RUN_TIME" period. This is more than fast enough and reduces
+  // the screen flicker.
+  if (fv_u32_lastRun + STATE_RUN_TIME < millis()){   
+    fv_u32_lastRun = millis();
+
+    switch(fv_u8_screen_state){
+      case STATE_SCREEN_MENU_MAIN:
+        break;
+      case STATE_SCREEN_MENU_PROFILE:
+        break;
+      case STATE_SCREEN_PROFILE:
+      case STATE_SCREEN_SET_POINT:
+        setPointStateMachine(0, 0, 0);
+      default:
+        break;
+    }
+  }
+
+}
+#endif
+
+/**
+ * @brief This function controls the pump relay in a fix set point manner
+ * @param [in] changeHighPress: 0 -> no, 1 -> increment, 2 -> decrement
+ * @param [in] changeLowPress:  0 -> no, 1 -> increment, 2 -> decrement
+ * @param [in] changeStartStop: 0 -> no, 1 -> start, 2 -> stop
+ */
+void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8_t changeStartStop){
+
+  static float    fv_f32_thresh_high          = 0.950;  // expressed in Bar
+  static float    fv_f32_thresh_low           = 0.900;  // expressed in Bar
+  static uint8_t  fv_u8_state                 = STATE_PUMP_IDLE;
+  static uint8_t  fv_u8_state_d1              = STATE_PUMP_IDLE;
+  static uint8_t  fv_u8_state_d2              = STATE_PUMP_IDLE;
+  static float    fv_f32_time_active          = 0.0;
+  static float    fv_f32_time_postRun         = 0.0;
+         float    fv_f32_pressure;
+         float    fv_f32_time_coolDown        = 0.0;
+
+  if(1 == changeHighPress){
+    if(0.951 >= (fv_f32_thresh_high + 0.025)){
+      fv_f32_thresh_high += 0.025;
+    }
+  }
+  if(2 == changeHighPress){
+    if(0.051 < (fv_f32_thresh_high - fv_f32_thresh_low)){
+      fv_f32_thresh_high -= 0.025;
+    }
+  }
+  if(1 == changeLowPress) {
+    if(0.051 < (fv_f32_thresh_high - fv_f32_thresh_low)){
+      fv_f32_thresh_low  += 0.025;
+    }
+  }
+  if(2 == changeLowPress) {
+    if(0.099 <= (fv_f32_thresh_low - 0.025)){
+      fv_f32_thresh_low -= 0.025;
+    }
+  }
+
   fv_f32_pressure = gv_mpr.readPressure(BAR);
-  Serial.print(fv_f32_pressure,6);
-  Serial.println(" bar");
+  //Serial.print(fv_f32_pressure,3);
+  //Serial.println(" bar");
+
+  if((1 == changeStartStop) && (STATE_PUMP_IDLE == fv_u8_state)){
+    if(fv_f32_thresh_low > fv_f32_pressure){
+      Serial.println("Starting pump control with pump off following user request.");
+      fv_u8_state = STATE_PUMP_OFF;
+      digitalWrite(PIN_RELAY, RELAY_OFF);
+    }
+    else{
+      Serial.println("Starting pump control with pump on following user request.");
+      fv_u8_state = STATE_PUMP_ON;
+      digitalWrite(PIN_RELAY, RELAY_ON); 
+    }
+  }
+
+  if(2 == changeStartStop){
+    Serial.println("Turning pump off following user request.");
+    digitalWrite(PIN_RELAY, RELAY_OFF);
+    if (STATE_PUMP_THERMAL_PROT != fv_u8_state) {
+      fv_u8_state                 = STATE_PUMP_IDLE;
+      fv_u8_state_d1              = STATE_PUMP_IDLE;
+      fv_u8_state_d2              = STATE_PUMP_IDLE;
+    }
+  }
 
   switch(fv_u8_state){
     case STATE_PUMP_OFF:
       if(fv_f32_thresh_high < fv_f32_pressure){
-        Serial.println("Turning pump on.");
+        Serial.println("Too high pressure, turning pump on.");
         fv_u8_state = STATE_PUMP_ON;
         digitalWrite(PIN_RELAY, RELAY_ON);      
       }
+      else{fv_f32_time_active -= PUMP_OFF_ACTIVE_TIME_DECREMENTER;}
       break;
     case STATE_PUMP_ON:
       if(fv_f32_thresh_low > fv_f32_pressure){
-        Serial.println("Turning pump off.");
+        Serial.println("Reached target pressure, going over to post-run time.");
+        fv_f32_time_postRun = 0.0;
+        fv_u8_state         = STATE_PUMP_HOLD;
+      }
+      else if (PUMP_THERMAL_PROT_TIME <= fv_f32_time_active){
+        Serial.println("Turning pump off as thermal protection.");
+        digitalWrite(PIN_RELAY, RELAY_OFF);    
+        fv_u8_state = STATE_PUMP_THERMAL_PROT;
+      }
+      else{fv_f32_time_active += ((float) STATE_RUN_TIME)/1000;}
+      break;
+    case STATE_PUMP_HOLD:
+      if (PUMP_THERMAL_PROT_TIME <= fv_f32_time_active){
+        Serial.println("Turning pump off as thermal protection.");
+        digitalWrite(PIN_RELAY, RELAY_OFF);    
+        fv_u8_state = STATE_PUMP_THERMAL_PROT;
+      }
+      else if(PUMP_POST_RUN_TIME <= fv_f32_time_postRun){
+        Serial.println("Post-run time finished, turning pump off.");
         fv_u8_state = STATE_PUMP_OFF;
         digitalWrite(PIN_RELAY, RELAY_OFF);
       }
+      else{
+        fv_f32_time_active  += ((float) STATE_RUN_TIME)/1000;
+        fv_f32_time_postRun += ((float) STATE_RUN_TIME)/1000;
+      }
       break;
-    case STATE_PUMP_HOLD:
-      //TODO, Intentional fall-through untill done
     case STATE_PUMP_THERMAL_PROT:
       if(fv_u8_state_d2 != fv_u8_state){
-        Serial.println("Turning pump off, thermal protection");
+        // Intentional duplication of the off event, making sure the pump is off
+        Serial.println("Turning pump off as thermal protection.");
+        digitalWrite(PIN_RELAY, RELAY_OFF);
       }
-      digitalWrite(PIN_RELAY, RELAY_OFF);
+
+      if(PUMP_THERMAL_PROT_RELEASE_TIME > fv_f32_time_active){
+        if (2 == gv_u8_startStopState){
+          Serial.println("Turning pump on after releasing thermal protection.");
+          fv_u8_state = STATE_PUMP_ON;
+          digitalWrite(PIN_RELAY, RELAY_ON);
+        }
+        else {
+          Serial.println("Going to idle after releasing thermal protection.");
+          fv_u8_state = STATE_PUMP_IDLE;
+        }
+      }
+      else{
+        fv_f32_time_active  -= PUMP_OFF_ACTIVE_TIME_DECREMENTER;
+        fv_f32_time_coolDown = (fv_f32_time_active - PUMP_THERMAL_PROT_RELEASE_TIME)/PUMP_OFF_ACTIVE_TIME_DECREMENTER;
+      }
       break;
     case STATE_PUMP_IDLE:
-      //Intentional fall-through
+      fv_f32_time_active -= PUMP_OFF_ACTIVE_TIME_DECREMENTER;
+      break;
     default:
-      if(fv_u8_state_d2 != fv_u8_state){
-        Serial.println("Turning pump off, controller to idle");
-      }
+      Serial.println("Unknown state. Turning pump off going to idle");
       fv_u8_state = STATE_PUMP_IDLE;
       digitalWrite(PIN_RELAY, RELAY_OFF);
       break;
   }
 
+  drawSetPointUpdate(fv_f32_thresh_high,
+                    fv_f32_thresh_low,
+                    fv_f32_pressure,
+                    state_pump_string(fv_u8_state),
+                    (uint16_t) fv_f32_time_active,
+                    (uint16_t) fv_f32_time_coolDown);
   fv_u8_state_d2 = fv_u8_state_d1;
   fv_u8_state_d1 = fv_u8_state;
-
 }
-#endif
 
 void splashScreen(void){
 
@@ -266,9 +443,9 @@ void splashScreen(void){
   tft.getTextBounds("VacuumPumpControl", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
 
   for(;fv_y>0;fv_y -= 2){
-    tft.fillRect(fv_x, fv_y, fv_width, fv_height, ILI9341_BLACK);
+    tft.fillRect(fv_x, fv_y+10, fv_width, fv_height, ILI9341_BLACK);
     fv_x = (int16_t) (0.0260596*(float)(fv_y * fv_y) - 2.563434*(float) fv_y + 63.02263);
-    tft.setCursor(fv_x,fv_y);
+    tft.setCursor(fv_x,fv_y+10);
     tft.setTextColor(ILI9341_BLUE);
     tft.print("Vacuum");
     tft.setTextColor(ILI9341_YELLOW);
@@ -278,51 +455,247 @@ void splashScreen(void){
     delay(5); 
   }
   delay(3000);
-
+  tft.fillRect(50, 28, 270, 15, ILI9341_BLACK);
 }
 
 void drawMainMenu(void){
   int16_t   fv_x1, fv_y1;
   uint16_t  fv_width, fv_height;
 
-  tft.fillRect(0, 18, tft.width(), tft.height(), ILI9341_BLACK);
-  tft.fillRoundRect((tft.width()-200)/2, 50, 200, 50, 3, BUTTON_BLUE);
-  tft.fillRoundRect((tft.width()-200)/2, 150, 200, 50, 3, BUTTON_BLUE);
-  tft.setTextSize(2);
-  tft.setTextColor(ILI9341_BLACK);
-  tft.getTextBounds("Set Point", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
-  tft.setCursor((tft.width()-fv_width)/2,(50+(50-fv_height)/2));
-  tft.print("Set Point");
-  tft.getTextBounds("Profile", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
-  tft.setCursor((tft.width()-fv_width)/2,(150+(50-fv_height)/2));
-  tft.print("Profile");
+  drawBackButton(false);
+  drawStartStopButton(0);
+  tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
+  drawButton(BUTTON_1X2_X_1, BUTTON_1X2_Y_1, BUTTON_1X2_WIDTH, BUTTON_1X2_HEIGTH, "Set Point");
+  drawButton(BUTTON_1X2_X_1, BUTTON_1X2_Y_2, BUTTON_1X2_WIDTH, BUTTON_1X2_HEIGTH, "Profile");
 }
 
 void drawProfileMenu(void){
   int16_t   fv_x1, fv_y1;
   uint16_t  fv_width, fv_height;
 
-  tft.fillRect(0, 18, tft.width(), tft.height(), ILI9341_BLACK);
-  tft.fillRoundRect((tft.width()/4)-(140/2), 50, 140, 50, 3, BUTTON_BLUE);
-  tft.fillRoundRect((tft.width()/4)-(140/2), 150, 140, 50, 3, BUTTON_BLUE);
-  tft.fillRoundRect(((tft.width()/4)*3)-(140/2), 50, 140, 50, 3, BUTTON_BLUE);
-  tft.fillRoundRect(((tft.width()/4)*3)-(140/2), 150, 140, 50, 3, BUTTON_BLUE);
-  tft.setTextSize(2);
-  tft.setTextColor(ILI9341_BLACK);
-  tft.getTextBounds("De-gas", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
-  tft.setCursor((tft.width()/4)-(fv_width/2),(50+(50-fv_height)/2));
-  tft.print("De-gas");
-  tft.getTextBounds("Profile 2", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
-  tft.setCursor((tft.width()/4)-(fv_width/2),(150+(50-fv_height)/2));
-  tft.print("Profile 2");
-  tft.getTextBounds("Profile 3", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
-  tft.setCursor(((tft.width()/4)*3)-(fv_width/2),(50+(50-fv_height)/2));
-  tft.print("Profile 3");
-  tft.getTextBounds("Profile 4", 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
-  tft.setCursor(((tft.width()/4)*3)-(fv_width/2),(150+(50-fv_height)/2));
-  tft.print("Profile 4");
+  tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
+  drawStartStopButton(0);
+  drawButton(BUTTON_2X2_X_1, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH, "De-gas");
+  drawButton(BUTTON_2X2_X_1, BUTTON_2X2_Y_2, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH, "Profile 2");
+  drawButton(BUTTON_2X2_X_2, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH, "Profile 3");
+  drawButton(BUTTON_2X2_X_2, BUTTON_2X2_Y_2, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH, "Profile 4");
+  drawBackButton(true);
 }
 
+/**
+ * @brief draws a button with centered text and configurable colors
+ * @param [in] x:           the x coordinate centered in the button
+ * @param [in] y:           the y coordinate centered in the button
+ * @param [in] width:       width of the button button
+ * @param [in] height:      height of in the button
+ * @param [in] text:        Text to be centered inside the button
+ * @param [in] textSize:    Size of the text (0 = no text)
+ * @param [in] buttonColor: Color to be used to draw the rectangle of the button
+ * @param [in] textColor:   Color to be used to draw the text of the button
+ */
+void drawButtonColor (uint16_t x,
+                      uint16_t y,
+                      uint16_t width,
+                      uint16_t heigth,
+                      const char* text,
+                      uint8_t  textSize,
+                      uint16_t buttonColor,
+                      uint16_t textColor){
+  int16_t   fv_x1, fv_y1;
+  uint16_t  fv_width, fv_height;
+
+  tft.fillRoundRect(x-(width/2), y-(heigth/2), width, heigth, 3, buttonColor);
+  if(textSize){
+    tft.setTextSize(textSize);
+    tft.setTextColor(textColor);
+    tft.getTextBounds(text, 0, 0, &fv_x1, &fv_y1, &fv_width, &fv_height);
+    tft.setCursor(x - (fv_width/2), y - (fv_height/2));
+    tft.print(text);
+  }
+}
+
+/**
+ * @brief draws a button with centered text
+ * @param [in] x:       the x coordinate centered in the button
+ * @param [in] y:       the y coordinate centered in the button
+ * @param [in] width:   width of the button button
+ * @param [in] height:  height of in the button
+ * @param [in] text:    Text to be centered inside the button
+ */
+void drawButton (uint16_t x, uint16_t y, uint16_t width, uint16_t heigth, const char* text){
+  drawButtonColor(x, y, width, heigth, text, 2, BUTTON_BLUE, ILI9341_BLACK);
+}
+
+/**
+ * @brief Draws/Clears the back button in the top left corner
+ * @param [in] visible: Whether to draw or clear the button
+ */
+void drawBackButton(bool visible){
+  if(!visible){
+    tft.fillRect(3,3,40,40,ILI9341_BLACK);
+  }
+  else{
+    tft.fillRoundRect(3,3, 40, 40, 3, BUTTON_BLUE);
+    tft.drawRect(13, 15, 15, 2, ILI9341_BLACK);
+    tft.drawRect(13, 30, 15, 2, ILI9341_BLACK);
+    tft.drawCircleHelper(25, 23, 8, 0x6, ILI9341_BLACK);
+    tft.drawCircleHelper(25, 23, 7, 0x6, ILI9341_BLACK);
+    tft.drawPixel(19,12,ILI9341_BLACK);
+    tft.drawLine(17,13,19,13,ILI9341_BLACK);
+    tft.drawLine(15,14,19,14,ILI9341_BLACK);
+    tft.drawLine(15,17,19,17,ILI9341_BLACK);
+    tft.drawLine(17,18,19,18,ILI9341_BLACK);
+    tft.drawPixel(19,19,ILI9341_BLACK);
+  }  
+}
+
+/**
+ * @brief Draws/Clears the back button in the top left corner
+ * @param [in] state: 0 -> black, 1 -> green, 2 -> red
+ */
+void drawStartStopButton(uint8_t state){
+  gv_u8_startStopState = state;
+  switch(state){    
+    case 1:
+      drawButtonColor(tft.width()-23,23,40,40,"Start",1,ILI9341_GREEN,ILI9341_BLACK);
+      break;
+    case 2:
+      drawButtonColor(tft.width()-23,23,40,40,"Stop",1,ILI9341_RED,ILI9341_BLACK);
+      break;
+    case 0:
+      // Intentional fall-through
+    default:
+      drawButtonColor(tft.width()-23,23,40,40,"",0,ILI9341_BLACK,ILI9341_BLACK);
+      gv_u8_startStopState = 0;
+      break;
+  }    
+}
+
+/**
+ * @brief Check if a given point falls within the square located around the center
+ * @param [in] point:   the point in question
+ * @param [in] x:       the center x coordinate
+ * @param [in] y:       the center y coordinate
+ * @param [in] width:   width of the square
+ * @param [in] height:  height of in square
+ */
+bool checkPointInSquare(TS_Point point, uint16_t x, uint16_t y, uint16_t width, uint16_t height){
+  if (((x - width/2) <= point.x) && ( (x + width/2) >= point.x)){
+    if (((y - height/2) <= point.y) && ( (y + height/2) >= point.y)){
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @brief Check if a given point falls within the back button location
+ * @param [in] point: the point in question
+ */
+bool backButtonLocation(TS_Point point){
+  return checkPointInSquare(point, 25, 25, 50, 50);
+}
+
+/**
+ * @brief Draws a rounded square 40 by 40 with a + or - symbol in it
+ * @param [in] incDec:  true -> +, false -> -
+ * @param [in] x:       x coordinate of the center
+ * @param [in] y:       y coordinate of the center
+ */
+void drawIncDecButton(bool incDec, uint16_t x, uint16_t y){
+  tft.drawRoundRect(x-20, y-20, 40, 40, 3, ILI9341_WHITE);
+  tft.fillRect(x-10,y-2,20,4,ILI9341_WHITE);
+  if(incDec){
+    tft.fillRect(x-2,y-10,4,20,ILI9341_WHITE);
+  }
+}
+
+/** 
+ * @brief Draws out the static parts of the Set point operation screen
+ */
+void drawSetPointInitial(){
+  drawBackButton(true);
+  drawStartStopButton(1);
+  tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(20,55);
+  tft.print("State:");
+  tft.setTextSize(1);
+  tft.setCursor(205,80);
+  tft.print("Current pressure:");
+  tft.setCursor(205,130);
+  tft.print("Active time:");
+  tft.setCursor(205,180);
+  tft.print("Cooldown time:");
+  drawIncDecButton(false, 40, 120);
+  drawIncDecButton(true, 170, 120);
+  drawIncDecButton(false, 40, 190);
+  drawIncDecButton(true, 170, 190);
+}
+
+void drawSetPointUpdate(float pressHigh, float pressLow, float press, const char* state, uint16_t onTime, uint16_t coolDownTime){
+  char fv_a6_str[6];
+
+  tft.fillRect(100,55,220,20,ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(100,55);
+  tft.print(state);
+
+  sprintf(fv_a6_str, "%.03f",pressHigh);
+  tft.fillRect(75,112,60,18,ILI9341_BLACK);
+  tft.setCursor(75,112);
+  tft.print(fv_a6_str);
+
+  sprintf(fv_a6_str, "%.03f",pressLow);
+  tft.fillRect(75,182,60,18,ILI9341_BLACK);
+  tft.setCursor(75,182);
+  tft.print(fv_a6_str);
+
+  sprintf(fv_a6_str, "%.03f",press);
+  tft.fillRect(220,100,60,18,ILI9341_BLACK);
+  tft.setCursor(220,100);
+  tft.print(fv_a6_str);
+
+  tft.fillRect(220,150,100,18,ILI9341_BLACK);
+  tft.setCursor(220,150);
+  tft.print(onTime);
+  tft.print(" s");
+
+  tft.fillRect(220,200,100,18,ILI9341_BLACK);
+  tft.setCursor(220,200);
+  tft.print(coolDownTime);
+  tft.print(" s");
+}
+
+/** 
+ * @brief Draws out the static parts of the Set point operation screen
+ */
+void drawProfileInitial(void){//profile_t* profile){
+
+  char fv_a100_str[100];
+
+  drawBackButton(true);
+  drawStartStopButton(1);
+  tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(20,55);
+  tft.print("State:");
+  tft.setTextSize(1);
+  tft.setCursor(205,80);
+  tft.print("Current pressure:");
+  tft.setCursor(205,130);
+  tft.print("Active time:");
+  tft.setCursor(205,180);
+  tft.print("Cooldown time:");
+
+/*
+  for(int i=0;i<profile.len;i++){
+    sprintf(fv_a100_str,"Point %d on time %lu go to pressure %.03f",i ,profile.array[i].time, profile.array][i].array);
+  }*/
+}
 
 //TODO these probably should be moved outside the main ino file
 #if defined(VERIFY_CALIBRATION) || defined(RUN_CALIBRATION)
