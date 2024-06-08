@@ -123,6 +123,7 @@ void loop() {
   static uint8_t  fv_u8_screen_state          = STATE_SCREEN_MENU_MAIN;
   static bool     fv_b_not_touched            = true;
   static uint32_t fv_u32_lastRun              = 0; // last time the state machine was executed, expressed in ms
+  static const profile_t* fv_selected_profile = &gv_profile1;
 
   uint32_t        fv_u32_time_backlight       = 0;
   TS_Point        fv_touch_point;
@@ -194,10 +195,13 @@ void loop() {
           else{
             if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_1, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
               drawProfileInitial(&gv_profile1);
+              fv_selected_profile = &gv_profile1;
               fv_u8_screen_state = STATE_SCREEN_PROFILE;
             }
             else if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_1, BUTTON_2X2_Y_2, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
-
+              drawProfileInitial(&gv_profile2);
+              fv_selected_profile = &gv_profile2;
+              fv_u8_screen_state = STATE_SCREEN_PROFILE;
             }
             else if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_2, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
 
@@ -210,8 +214,21 @@ void loop() {
           break;
         case STATE_SCREEN_PROFILE:
           if (backButtonLocation(fv_touch_point)){
-            fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
-            drawMainMenu();
+            fv_u8_screen_state = STATE_SCREEN_MENU_PROFILE;
+            profileControl(fv_selected_profile,2);
+            drawProfileMenu();
+          }
+          else{
+            if (checkPointInSquare(fv_touch_point, tft.width()-23,23,40,40)){
+              if(1 == gv_u8_startStopState){
+                profileControl(fv_selected_profile,1);
+                drawStartStopButton(2);
+              }
+              else{
+                profileControl(fv_selected_profile,2);
+                drawStartStopButton(1);
+              }
+            }
           }
           break;
         case STATE_SCREEN_SET_POINT:
@@ -271,6 +288,7 @@ void loop() {
       case STATE_SCREEN_MENU_PROFILE:
         break;
       case STATE_SCREEN_PROFILE:
+        profileControl(fv_selected_profile,0);
         break;
       case STATE_SCREEN_SET_POINT:
         setPointControl(0, 0, 0);
@@ -292,6 +310,7 @@ void setPointControl(uint8_t changeHighPress, uint8_t changeLowPress, uint8_t ch
 
   static float    fv_f32_thresh_high          = 0.950;  // expressed in Bar //TODO change initial value to define
   static float    fv_f32_thresh_low           = 0.900;  // expressed in Bar //TODO change initial value to define
+  static bool     fv_first_run                = true;
 
   if(1 == changeHighPress){
     if(0.951 >= (fv_f32_thresh_high + 0.025)){
@@ -314,12 +333,76 @@ void setPointControl(uint8_t changeHighPress, uint8_t changeLowPress, uint8_t ch
     }
   }
 
-  if((0 != changeLowPress) || (0 != changeHighPress)){
+  if((0 != changeLowPress) || (0 != changeHighPress) || fv_first_run){
     drawSetPointUpdate(fv_f32_thresh_high, fv_f32_thresh_low);
+    fv_first_run = false;
+  }
+
+  if(2 == changeStartStop){
+    fv_first_run = true;
   }
 
   pumpStateMachine(fv_f32_thresh_high, fv_f32_thresh_low, PUMP_POST_RUN_TIME, changeStartStop);
+}
 
+/**
+ * @brief This function controls the pump relay in a fix set point manner
+ * @param [in] changeStartStop: 0 -> no, 1 -> start, 2 -> stop
+ */
+void profileControl(const profile_t* profile, uint8_t changeStartStop){
+
+  float           fv_f32_thresh_high          = 0;  // expressed in Bar
+  float           fv_f32_thresh_low           = 0;  // expressed in Bar
+  float           fv_f32_pressure;
+  static uint32_t fv_u32_startTime            = 0;
+  uint32_t        fv_u32_runTime              = (0 != fv_u32_startTime)? (millis()/1000) - fv_u32_startTime : 0;
+  uint32_t        fv_u32_endTime              = profile->profileData[profile->length-1].time;
+  float           fv_f32_timePerPixel         = (float)fv_u32_endTime/150;
+  float           fv_f32_barPerPixel          = 1.0/100;
+  static uint8_t  fv_u8_profilePosition       = 0;
+
+  if(2 == changeStartStop){
+    fv_u32_startTime      = 0;
+    fv_u32_runTime        = 0;
+    fv_u8_profilePosition = 0;
+    tft.fillRect(100,95,85,10,ILI9341_BLACK);
+    drawProfileInitial(profile);
+  }
+  else if(1 == changeStartStop){
+    fv_u32_startTime  = millis()/1000;
+    tft.fillRect(100,95,85,10,ILI9341_BLACK);
+    tft.setCursor(100,95);
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_WHITE);
+    tft.print("Target: ");
+    tft.print(profile->profileData[0].pressure);
+  }
+
+  if(fv_u8_profilePosition < (profile->length)-1){
+    if(fv_u32_runTime > profile->profileData[fv_u8_profilePosition+1].time){
+      fv_u8_profilePosition++;
+      tft.fillRect(100,95,85,10,ILI9341_BLACK);
+      tft.setCursor(100,95);
+      tft.setTextSize(1);
+      tft.setTextColor(ILI9341_WHITE);
+      tft.print("Target: ");
+      tft.print(profile->profileData[fv_u8_profilePosition].pressure);
+    }
+  }
+
+  if((fv_u32_runTime > fv_u32_endTime) && (1 == fv_u32_runTime%fv_u32_endTime)){
+    tft.fillRect(26,105,159,102,ILI9341_BLACK);
+    tft.drawFastHLine(25, 110 + (100 - (profile->profileData[fv_u8_profilePosition].pressure / fv_f32_barPerPixel)), 160, ILI9341_WHITE);
+  }
+
+  if(0 != fv_u32_runTime){
+    fv_f32_pressure = gv_mpr.readPressure(BAR);
+    tft.drawPixel(25+((fv_u32_runTime%fv_u32_endTime) / fv_f32_timePerPixel),110 + (100 - (fv_f32_pressure / fv_f32_barPerPixel)),ILI9341_RED);
+  }
+
+  fv_f32_thresh_low = profile->profileData[fv_u8_profilePosition].pressure;
+
+  pumpStateMachine(fv_f32_thresh_low+0.05, fv_f32_thresh_low, 5, changeStartStop);
 }
 
 /**
@@ -627,9 +710,10 @@ void drawIncDecButton(bool incDec, uint16_t x, uint16_t y){
 
 /** 
  * @brief Draws out the static parts of the Set point operation screen
+ * @remark  This function assumes that the area it needs to draw on has been cleared <!--\
+ * -->      by the calling function
  */
 void drawPumpControlInitial(){
-  tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
   tft.setTextSize(2);
   tft.setTextColor(ILI9341_WHITE);
   tft.setCursor(20,55);
@@ -644,7 +728,7 @@ void drawPumpControlInitial(){
 }
 
 /** 
- * @brief Draws out the static parts of the Set point operation screen
+ * @brief   Draws out the static parts of the Set point operation screen
  */
 void drawSetPointInitial(){
   drawBackButton(true);
@@ -659,6 +743,9 @@ void drawSetPointInitial(){
 
 void drawSetPointUpdate(float pressHigh, float pressLow){
   char fv_a6_str[6];
+
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
 
   sprintf(fv_a6_str, "%.03f",pressHigh);
   tft.fillRect(75,112,60,18,ILI9341_BLACK);
@@ -698,31 +785,83 @@ void drawPumpStateUpdate(float press, const char* state, uint16_t onTime, uint16
 }
 
 /** 
- * @brief Draws out the static parts of the Set point operation screen
+ * @brief   Draws out the static parts of the a profile control screen
  */
 void drawProfileInitial(const profile_t* profile){
 
-  char fv_a100_str[100];
+  char      fv_a100_str[100];
+  uint32_t  fv_u32_endTime = profile->profileData[profile->length-1].time;
+  float     fv_f32_timePerPixel = (float)fv_u32_endTime/150;
+  float     fv_f32_barPerPixel = 1.0/100;
+  uint8_t   i=0, j=0;
 
   drawBackButton(true);
   drawStartStopButton(1);
   tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setCursor(20,55);
-  tft.print("State:");
-  tft.setTextSize(1);
-  tft.setCursor(205,80);
-  tft.print("Current pressure:");
-  tft.setCursor(205,130);
-  tft.print("Active time:");
-  tft.setCursor(205,180);
-  tft.print("Cooldown time:");
+  drawPumpControlInitial();
 
-  Serial.println(profile->length);
-  for(int i=0;i<profile->length;i++){
-    sprintf(fv_a100_str,"Point %d on time %lu go to pressure %.03f",i ,profile->profileData[i].time, profile->profileData[i].pressure);
-    Serial.println(fv_a100_str);
+  // Plot the axis
+  tft.drawFastHLine(25 , 210, 160, ILI9341_WHITE);
+  tft.drawLine(179, 207, 185, 210, ILI9341_WHITE);
+  tft.drawLine(179, 213, 185, 210, ILI9341_WHITE);
+  tft.drawFastVLine(25 , 100, 110, ILI9341_WHITE);
+  tft.drawLine(25, 100, 22, 106, ILI9341_WHITE);
+  tft.drawLine(25, 100, 28, 106, ILI9341_WHITE);
+
+  tft.setTextSize(1);
+  tft.setTextColor(ILI9341_WHITE);
+
+  // Plot the Y-axis ticks
+  tft.setCursor(16,85);
+  tft.print("BAR");
+
+  tft.setCursor(2,107);
+  tft.print("1.0");
+  tft.drawFastHLine(22, 110 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 120 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 130 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 140 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 150 , 3, ILI9341_WHITE);
+  tft.setCursor(2,157);
+  tft.print("0.5");
+  tft.drawFastHLine(22, 160 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 170 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 180 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 190 , 3, ILI9341_WHITE);
+  tft.drawFastHLine(22, 200 , 3, ILI9341_WHITE);
+
+  // Plot the X axis ticks
+  tft.setCursor(190,220);
+  tft.print("min");
+
+  tft.drawFastVLine(175, 210, 4, ILI9341_WHITE);
+  sprintf(fv_a100_str,"%d",fv_u32_endTime / 60);
+  drawButtonColor(175,225,2,2,fv_a100_str,1,ILI9341_BLACK,ILI9341_WHITE);
+  tft.drawFastVLine(136, 210, 4, ILI9341_WHITE);
+  sprintf(fv_a100_str,"%d",fv_u32_endTime / 80);
+  drawButtonColor(136,225,2,2,fv_a100_str,1,ILI9341_BLACK,ILI9341_WHITE);
+  tft.drawFastVLine(100, 210, 4, ILI9341_WHITE);
+  sprintf(fv_a100_str,"%d",fv_u32_endTime / 120);
+  drawButtonColor(100,225,2,2,fv_a100_str,1,ILI9341_BLACK,ILI9341_WHITE);
+  tft.drawFastVLine(62, 210, 4, ILI9341_WHITE);
+  sprintf(fv_a100_str,"%d",fv_u32_endTime / 240);
+  drawButtonColor(62,225,2,2,fv_a100_str,1,ILI9341_BLACK,ILI9341_WHITE);
+
+  // Plot the profile line
+  for(i=0;i<160;i++){
+    if(j < profile->length-1){
+      if(profile->profileData[j+1].time < i*fv_f32_timePerPixel){
+        j++;
+        tft.drawFastVLine(25+i, 
+                          110 + (100 - (profile->profileData[j-1].pressure / fv_f32_barPerPixel)),
+                          ((profile->profileData[j-1].pressure - profile->profileData[j].pressure) / fv_f32_barPerPixel)+1,
+                          ILI9341_WHITE);
+      }
+    }
+    tft.drawPixel(25+i,110 + (100 - (profile->profileData[j].pressure / fv_f32_barPerPixel)),ILI9341_WHITE);
+    if(0 == i%3){
+      tft.drawPixel(25+i,110 + (100 - ((profile->profileData[j].pressure + 0.05) / fv_f32_barPerPixel)),ILI9341_WHITE);
+    }
   }
 }
 
