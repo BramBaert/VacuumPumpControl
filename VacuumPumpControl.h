@@ -93,7 +93,6 @@ static TS_Point _touchPoint[] = {
 #define BUTTON_2X2_WIDTH        140
 #define BUTTON_2X2_HEIGTH       50
 
-/*
 typedef struct {
     uint32_t time;   // Time field
     float pressure;  // Pressure field
@@ -101,7 +100,7 @@ typedef struct {
 
 typedef struct {
   size_t                length;
-  const timePressure_t* profileData[];
+  const timePressure_t* profileData;
 } profile_t;
 
 const timePressure_t gv_a_timePressure_p1[9] = {{0, 0.9f},
@@ -115,10 +114,9 @@ const timePressure_t gv_a_timePressure_p1[9] = {{0, 0.9f},
                                                 {480, 0.1f}};
 
 const profile_t gv_profile1 = {
-    .length = sizeof(gv_a_timePressure_p1),
+    .length = 9,
     .profileData = gv_a_timePressure_p1
 };
-*/
 
 enum class PointID { NONE = -1, A, B, C, COUNT };
 

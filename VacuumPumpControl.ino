@@ -193,7 +193,7 @@ void loop() {
           }
           else{
             if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_1, BUTTON_2X2_Y_1, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
-              drawProfileInitial();//gv_profile1);
+              drawProfileInitial(&gv_profile1);
               fv_u8_screen_state = STATE_SCREEN_PROFILE;
             }
             else if (checkPointInSquare(fv_touch_point, BUTTON_2X2_X_1, BUTTON_2X2_Y_2, BUTTON_2X2_WIDTH, BUTTON_2X2_HEIGTH)){
@@ -211,41 +211,40 @@ void loop() {
         case STATE_SCREEN_PROFILE:
           if (backButtonLocation(fv_touch_point)){
             fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
-            setPointStateMachine(0,0,2);
             drawMainMenu();
           }
           break;
         case STATE_SCREEN_SET_POINT:
           if (backButtonLocation(fv_touch_point)){
             fv_u8_screen_state = STATE_SCREEN_MENU_MAIN;
-            setPointStateMachine(0,0,2);
+            setPointControl(0,0,2);
             drawMainMenu();
           }
           else{
             // High pressure decrement
             if (checkPointInSquare(fv_touch_point, 40, 120, 40 , 40)){
-              setPointStateMachine(2,0,0);
+              setPointControl(2,0,0);
             }
             // High pressure increment
             else if (checkPointInSquare(fv_touch_point, 170, 120, 40, 40)){
-              setPointStateMachine(1,0,0);
+              setPointControl(1,0,0);
             }
             // Low pressure decrement
             else if (checkPointInSquare(fv_touch_point, 40, 190, 40, 40)){
-              setPointStateMachine(0,2,0);
+              setPointControl(0,2,0);
             }
             // High pressure increment
             else if (checkPointInSquare(fv_touch_point, 170, 190, 40, 40)){
-              setPointStateMachine(0,1,0);
+              setPointControl(0,1,0);
             }
             // Start / Stop
             else if (checkPointInSquare(fv_touch_point, tft.width()-23,23,40,40)){
               if(1 == gv_u8_startStopState){
-                setPointStateMachine(0,0,1);
+                setPointControl(0,0,1);
                 drawStartStopButton(2);
               }
               else{
-                setPointStateMachine(0,0,2);
+                setPointControl(0,0,2);
                 drawStartStopButton(1);
               }
             }
@@ -272,8 +271,9 @@ void loop() {
       case STATE_SCREEN_MENU_PROFILE:
         break;
       case STATE_SCREEN_PROFILE:
+        break;
       case STATE_SCREEN_SET_POINT:
-        setPointStateMachine(0, 0, 0);
+        setPointControl(0, 0, 0);
       default:
         break;
     }
@@ -288,17 +288,10 @@ void loop() {
  * @param [in] changeLowPress:  0 -> no, 1 -> increment, 2 -> decrement
  * @param [in] changeStartStop: 0 -> no, 1 -> start, 2 -> stop
  */
-void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8_t changeStartStop){
+void setPointControl(uint8_t changeHighPress, uint8_t changeLowPress, uint8_t changeStartStop){
 
-  static float    fv_f32_thresh_high          = 0.950;  // expressed in Bar
-  static float    fv_f32_thresh_low           = 0.900;  // expressed in Bar
-  static uint8_t  fv_u8_state                 = STATE_PUMP_IDLE;
-  static uint8_t  fv_u8_state_d1              = STATE_PUMP_IDLE;
-  static uint8_t  fv_u8_state_d2              = STATE_PUMP_IDLE;
-  static float    fv_f32_time_active          = 0.0;
-  static float    fv_f32_time_postRun         = 0.0;
-         float    fv_f32_pressure;
-         float    fv_f32_time_coolDown        = 0.0;
+  static float    fv_f32_thresh_high          = 0.950;  // expressed in Bar //TODO change initial value to define
+  static float    fv_f32_thresh_low           = 0.900;  // expressed in Bar //TODO change initial value to define
 
   if(1 == changeHighPress){
     if(0.951 >= (fv_f32_thresh_high + 0.025)){
@@ -321,12 +314,35 @@ void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8
     }
   }
 
+  if((0 != changeLowPress) || (0 != changeHighPress)){
+    drawSetPointUpdate(fv_f32_thresh_high, fv_f32_thresh_low);
+  }
+
+  pumpStateMachine(fv_f32_thresh_high, fv_f32_thresh_low, PUMP_POST_RUN_TIME, changeStartStop);
+
+}
+
+/**
+ * @brief This function controls the pump relay in a fix set point manner
+ * @param [in] highPressThresh: Pressure at which to turn back on the pump after previously reaching the  setpoint
+ * @param [in] lowPressThresh:  Pressure at which to turn off the pump (the set point)
+ * @param [in] postRunTime:     Additional Time to keep the pump turning after reaching the set point
+ * @param [in] changeStartStop: 0 -> no, 1 -> start, 2 -> stop
+ */
+void pumpStateMachine(float highPressThresh, float lowPressThresh, uint16_t postRunTime, uint8_t changeStartStop){
+
+  static uint8_t  fv_u8_state                 = STATE_PUMP_IDLE;
+  static uint8_t  fv_u8_state_d1              = STATE_PUMP_IDLE;
+  static uint8_t  fv_u8_state_d2              = STATE_PUMP_IDLE;
+  static float    fv_f32_time_active          = 0.0;
+  static float    fv_f32_time_postRun         = 0.0;
+         float    fv_f32_pressure;
+         float    fv_f32_time_coolDown        = 0.0;
+
   fv_f32_pressure = gv_mpr.readPressure(BAR);
-  //Serial.print(fv_f32_pressure,3);
-  //Serial.println(" bar");
 
   if((1 == changeStartStop) && (STATE_PUMP_IDLE == fv_u8_state)){
-    if(fv_f32_thresh_low > fv_f32_pressure){
+    if(lowPressThresh > fv_f32_pressure){
       Serial.println("Starting pump control with pump off following user request.");
       fv_u8_state = STATE_PUMP_OFF;
       digitalWrite(PIN_RELAY, RELAY_OFF);
@@ -350,7 +366,7 @@ void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8
 
   switch(fv_u8_state){
     case STATE_PUMP_OFF:
-      if(fv_f32_thresh_high < fv_f32_pressure){
+      if(highPressThresh < fv_f32_pressure){
         Serial.println("Too high pressure, turning pump on.");
         fv_u8_state = STATE_PUMP_ON;
         digitalWrite(PIN_RELAY, RELAY_ON);      
@@ -358,7 +374,7 @@ void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8
       else{fv_f32_time_active -= PUMP_OFF_ACTIVE_TIME_DECREMENTER;}
       break;
     case STATE_PUMP_ON:
-      if(fv_f32_thresh_low > fv_f32_pressure){
+      if(lowPressThresh > fv_f32_pressure){
         Serial.println("Reached target pressure, going over to post-run time.");
         fv_f32_time_postRun = 0.0;
         fv_u8_state         = STATE_PUMP_HOLD;
@@ -376,7 +392,7 @@ void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8
         digitalWrite(PIN_RELAY, RELAY_OFF);    
         fv_u8_state = STATE_PUMP_THERMAL_PROT;
       }
-      else if(PUMP_POST_RUN_TIME <= fv_f32_time_postRun){
+      else if(postRunTime <= fv_f32_time_postRun){
         Serial.println("Post-run time finished, turning pump off.");
         fv_u8_state = STATE_PUMP_OFF;
         digitalWrite(PIN_RELAY, RELAY_OFF);
@@ -419,15 +435,14 @@ void setPointStateMachine(uint8_t changeHighPress, uint8_t changeLowPress, uint8
       break;
   }
 
-  drawSetPointUpdate(fv_f32_thresh_high,
-                    fv_f32_thresh_low,
-                    fv_f32_pressure,
-                    state_pump_string(fv_u8_state),
-                    (uint16_t) fv_f32_time_active,
-                    (uint16_t) fv_f32_time_coolDown);
+  drawPumpStateUpdate(fv_f32_pressure,
+                      state_pump_string(fv_u8_state),
+                      (uint16_t) fv_f32_time_active,
+                      (uint16_t) fv_f32_time_coolDown);
   fv_u8_state_d2 = fv_u8_state_d1;
   fv_u8_state_d1 = fv_u8_state;
 }
+
 
 void splashScreen(void){
 
@@ -613,9 +628,7 @@ void drawIncDecButton(bool incDec, uint16_t x, uint16_t y){
 /** 
  * @brief Draws out the static parts of the Set point operation screen
  */
-void drawSetPointInitial(){
-  drawBackButton(true);
-  drawStartStopButton(1);
+void drawPumpControlInitial(){
   tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
   tft.setTextSize(2);
   tft.setTextColor(ILI9341_WHITE);
@@ -628,20 +641,24 @@ void drawSetPointInitial(){
   tft.print("Active time:");
   tft.setCursor(205,180);
   tft.print("Cooldown time:");
+}
+
+/** 
+ * @brief Draws out the static parts of the Set point operation screen
+ */
+void drawSetPointInitial(){
+  drawBackButton(true);
+  drawStartStopButton(1);
+  tft.fillRect(0, 43, tft.width(), tft.height(), ILI9341_BLACK);
   drawIncDecButton(false, 40, 120);
   drawIncDecButton(true, 170, 120);
   drawIncDecButton(false, 40, 190);
   drawIncDecButton(true, 170, 190);
+  drawPumpControlInitial();
 }
 
-void drawSetPointUpdate(float pressHigh, float pressLow, float press, const char* state, uint16_t onTime, uint16_t coolDownTime){
+void drawSetPointUpdate(float pressHigh, float pressLow){
   char fv_a6_str[6];
-
-  tft.fillRect(100,55,220,20,ILI9341_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setCursor(100,55);
-  tft.print(state);
 
   sprintf(fv_a6_str, "%.03f",pressHigh);
   tft.fillRect(75,112,60,18,ILI9341_BLACK);
@@ -652,6 +669,17 @@ void drawSetPointUpdate(float pressHigh, float pressLow, float press, const char
   tft.fillRect(75,182,60,18,ILI9341_BLACK);
   tft.setCursor(75,182);
   tft.print(fv_a6_str);
+
+}
+
+void drawPumpStateUpdate(float press, const char* state, uint16_t onTime, uint16_t coolDownTime){
+  char fv_a6_str[6];
+
+  tft.fillRect(100,55,220,20,ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(100,55);
+  tft.print(state);
 
   sprintf(fv_a6_str, "%.03f",press);
   tft.fillRect(220,100,60,18,ILI9341_BLACK);
@@ -672,7 +700,7 @@ void drawSetPointUpdate(float pressHigh, float pressLow, float press, const char
 /** 
  * @brief Draws out the static parts of the Set point operation screen
  */
-void drawProfileInitial(void){//profile_t* profile){
+void drawProfileInitial(const profile_t* profile){
 
   char fv_a100_str[100];
 
@@ -691,10 +719,11 @@ void drawProfileInitial(void){//profile_t* profile){
   tft.setCursor(205,180);
   tft.print("Cooldown time:");
 
-/*
-  for(int i=0;i<profile.len;i++){
-    sprintf(fv_a100_str,"Point %d on time %lu go to pressure %.03f",i ,profile.array[i].time, profile.array][i].array);
-  }*/
+  Serial.println(profile->length);
+  for(int i=0;i<profile->length;i++){
+    sprintf(fv_a100_str,"Point %d on time %lu go to pressure %.03f",i ,profile->profileData[i].time, profile->profileData[i].pressure);
+    Serial.println(fv_a100_str);
+  }
 }
 
 //TODO these probably should be moved outside the main ino file
